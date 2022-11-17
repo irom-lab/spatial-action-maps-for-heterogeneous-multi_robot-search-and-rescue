@@ -6,7 +6,7 @@ from multiprocessing.connection import Client
 from pathlib import Path
 from pprint import pprint
 
-import anki_vector
+# import anki_vector
 import numpy as np
 import pybullet
 import pybullet_utils.bullet_client as bc
@@ -114,9 +114,9 @@ class VectorEnv:
             self.p.configureDebugVisualizer(pybullet.COV_ENABLE_GUI, 0)
         else:
             self.p = bc.BulletClient(connection_mode=pybullet.DIRECT)
-            if self.use_egl_renderer:
-                assert sys.platform == 'linux'  # Linux only
-                self.plugin_id = self.p.loadPlugin(pkgutil.get_loader('eglRenderer').get_filename(), "_eglRendererPlugin")
+            # if self.use_egl_renderer:
+                # assert sys.platform == 'linux'  # Linux only
+                # self.plugin_id = self.p.loadPlugin(pkgutil.get_loader('eglRenderer').get_filename(), "_eglRendererPlugin")
 
         self.p.resetDebugVisualizerCamera(
             0.47 + (5.25 - 0.47) / (10 - 0.7) * (self.room_length - 0.7), 0, -70,
