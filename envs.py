@@ -50,6 +50,7 @@ class VectorEnv:
             random_seed=None, use_egl_renderer=False,
             show_gui=False, show_debug_annotations=False, show_occupancy_maps=False,
             real=False, real_robot_indices=None, real_cube_indices=None, real_debug=False,
+            use_visit_frequency_map=False,
         ):
 
         ################################################################################
@@ -77,6 +78,7 @@ class VectorEnv:
         self.use_intention_channels = use_intention_channels
         self.intention_channel_encoding = intention_channel_encoding
         self.intention_channel_nonspatial_scale = intention_channel_nonspatial_scale
+        self.use_visit_frequency_map = use_visit_frequency_map
 
         # Rewards
         self.use_shortest_path_partial_rewards = use_shortest_path_partial_rewards
@@ -1960,7 +1962,12 @@ class Camera(ABC):
             seg += Camera.SEG_VALUES['receptacle'] * (seg_raw == self.receptacle_id).astype(np.float32)
         seg += Camera.SEG_VALUES['cube'] * np.logical_and(seg_raw >= self.min_cube_id, seg_raw <= self.max_cube_id).astype(np.float32)
 
-        return points, seg
+        # Get seg_visit
+        seg_visit = np.zeros_like(seg_raw, dtype=np.float32)
+        seg_visit += 1 * (seg_raw == 0)
+        seg_visit += 1 * (seg_raw >= self.min_obstacle_id) * (seg_raw <= self.max_obstacle_id)
+
+        return points, seg, seg_visit
 
     def get_seg_value(self, body_type):
         self._ensure_initialized()
@@ -2036,6 +2043,10 @@ class Mapper:
         # Occupancy map
         self.global_occupancy_map = OccupancyMap(self.robot, self.env.room_length, self.env.room_width, show_map=self.env.show_occupancy_maps)
 
+        # Visit Frequency Map
+        self.global_visit_frequency_map = self._create_padded_room_zeros()
+        self.step_exploration = self._create_padded_room_zeros()
+
         # Robot masks for overhead map and robot map
         self.robot_masks = {}
         for g in self.env.robot_config:
@@ -2061,7 +2072,7 @@ class Mapper:
 
     def update(self):
         # Get new observation
-        points, seg = self.camera.capture_image(self.robot.get_position(), self.robot.get_heading())
+        points, seg, seg_visit = self.camera.capture_image(self.robot.get_position(), self.robot.get_heading())
         augmented_points = np.concatenate((points, seg[:, :, np.newaxis]), axis=2).reshape(-1, 4)
         augmented_points = augmented_points[np.argsort(augmented_points[:, 2])]
 
@@ -2072,6 +2083,18 @@ class Mapper:
         # Update occupancy map
         if self.global_occupancy_map is not None:
             self.global_occupancy_map.update(points, seg, self.camera.get_seg_value('obstacle'))
+
+        # Update step exploration map
+        if self.global_visit_frequency_map is not None:
+            augmented_points = np.concatenate((points, np.isclose(seg_visit[:, :, np.newaxis], 1)), axis=2).reshape(-1, 4)
+            augmented_points = augmented_points[np.isclose(augmented_points[:, 3], 1)]
+            pixel_i, pixel_j = Mapper.position_to_pixel_indices(augmented_points[:, 0], augmented_points[:, 1], self.global_visit_frequency_map.shape)
+            self.step_exploration[pixel_i, pixel_j] = 1
+            self._update_vfm_state()
+
+    def _update_vfm_state(self):
+        self.global_visit_frequency_map += self.step_exploration
+        self.step_exploration = self._create_padded_room_zeros()
 
     def get_state(self, save_figures=False):
         channels = []
@@ -2114,6 +2137,10 @@ class Mapper:
             global_intention_map = self._create_global_intention_or_history_map(encoding=self.env.intention_map_encoding)
             local_intention_map = self._get_local_map(global_intention_map)
             channels.append(local_intention_map)
+
+        # Visit frequency map
+        if self.env.use_visit_frequency_map:
+            channels.append(self._get_local_visit_frequency_map(self.global_visit_frequency_map))
 
         # Baseline intention channels
         if self.env.use_intention_channels:
@@ -2222,6 +2249,10 @@ class Mapper:
         local_map = self._get_local_map(global_map)
         local_map -= local_map.min()
         return local_map
+
+    def _get_local_visit_frequency_map(self, global_map):
+        local_visit_freq_map = self._get_local_map(global_map)
+        return local_visit_freq_map
 
     @staticmethod
     def _create_robot_mask(robot_cls, show_lifted_cube=False):
