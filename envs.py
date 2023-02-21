@@ -438,7 +438,7 @@ class VectorEnv:
         assert all(len(g) == 1 for g in self.robot_config)  # Each robot group should be homogeneous
         assert not len(self.robot_group_types) > 4  # More than 4 groups not supported
         if any('rescue_robot' in g for g in self.robot_config):
-            assert all(robot_type == 'rescue_robot' for g in self.robot_config for robot_type in g)
+            assert all(robot_type == 'rescue_robot' or robot_type == 'exploring_robot' for g in self.robot_config for robot_type in g)
 
         # Create floor
         floor_thickness = 10
@@ -1049,6 +1049,8 @@ class Robot(ABC):
             return ThrowingRobot
         if robot_type == 'rescue_robot':
             return RescueRobot
+        if robot_type == 'exploring_robot':
+            return ExploringRobot
         raise Exception(robot_type)
 
     @staticmethod
@@ -1365,6 +1367,11 @@ class RescueRobot(RobotWithHooks):
         self.env.remove_cube(self.cube_id)
         self.cube_id = None
 
+class ExploringRobot(RobotWithHooks):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.cube_id = None
+
 class RobotController:
     DRIVE_STEP_SIZE = 0.005  # 5 mm results in exactly 1 mm per simulation step
     TURN_STEP_SIZE = math.radians(15)  # 15 deg results in exactly 3 deg per simulation step
@@ -1500,6 +1507,8 @@ class RobotController:
                     elif isinstance(self.robot, RescueRobot):
                         self.robot.prepare_rescue_cube(cube_id)
                         self.robot.rescue_cube()
+                    elif isinstance(self.robot, ExploringRobot):
+                        pass
 
 class RealRobotController:
     LOOKAHEAD_DISTANCE = 0.1  # 10 cm
