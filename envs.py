@@ -50,7 +50,7 @@ class VectorEnv:
             random_seed=None, use_egl_renderer=False,
             show_gui=False, show_debug_annotations=False, show_occupancy_maps=False,
             real=False, real_robot_indices=None, real_cube_indices=None, real_debug=False,
-            use_visit_frequency_map=False,
+            use_visit_frequency_map=False, visit_frequency_map_scale=0.00
         ):
 
         ################################################################################
@@ -79,6 +79,7 @@ class VectorEnv:
         self.intention_channel_encoding = intention_channel_encoding
         self.intention_channel_nonspatial_scale = intention_channel_nonspatial_scale
         self.use_visit_frequency_map = use_visit_frequency_map
+        self.visit_frequency_map_scale = visit_frequency_map_scale
 
         # Rewards
         self.use_shortest_path_partial_rewards = use_shortest_path_partial_rewards
@@ -2093,6 +2094,7 @@ class Mapper:
             self._update_vfm_state()
 
     def _update_vfm_state(self):
+        self.step_exploration *= self.env.visit_frequency_map_scale
         self.global_visit_frequency_map += self.step_exploration
         self.step_exploration = self._create_padded_room_zeros()
 

@@ -191,7 +191,7 @@ def get_env_from_cfg(cfg, **kwargs):
             final_kwargs[arg_name] = cfg[arg_name]
         else:
             print('kwarg {} not found in config'.format(arg_name))
-            if arg_name not in {'use_robot_map', 'intention_map_scale', 'intention_map_line_thickness', 'use_visit_frequency_map'}:
+            if arg_name not in {'use_robot_map', 'intention_map_scale', 'intention_map_line_thickness', 'use_visit_frequency_map', 'visit_frequency_map_scale'}:
                 raise Exception
     final_kwargs.update(kwargs)
 
