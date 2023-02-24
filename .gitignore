@@ -2,6 +2,6 @@
 __pycache__
 .ipynb_checkpoints
 checkpoints
-logs
+logs*
 figures
 eval
