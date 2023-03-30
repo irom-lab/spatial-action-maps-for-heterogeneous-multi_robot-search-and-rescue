@@ -2358,13 +2358,11 @@ class Mapper:
         return global_map
     
     def _create_global_shortest_path_to_cube_map(self):
-        global_map = self._create_padded_room_zeros()
-        global_map[global_map == 0] = np.inf
+        global_map = self._create_padded_room_zeros() + np.sqrt(self.env.room_length ** 2 + self.env.room_width ** 2)
         for cube_id in self.env.found_cube_ids_set:
             temp_map = self.global_occupancy_map.shortest_path_image(self.env.get_cube_position(cube_id))
             global_map = np.minimum(global_map, temp_map)
         global_map[global_map < 0] = global_map.max()
-        global_map[global_map == np.inf] = global_map.max()
         global_map *= self.env.shortest_path_map_scale
         return global_map
     
