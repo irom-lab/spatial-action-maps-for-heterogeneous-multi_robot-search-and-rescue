@@ -50,7 +50,8 @@ class VectorEnv:
             random_seed=None, use_egl_renderer=False,
             show_gui=False, show_debug_annotations=False, show_occupancy_maps=False,
             real=False, real_robot_indices=None, real_cube_indices=None, real_debug=False,
-            use_visit_frequency_map=False, visit_frequency_map_scale=0.00
+            use_visit_frequency_map=False, visit_frequency_map_scale=0.00,
+            use_shortest_path_to_cube_map=False
         ):
 
         ################################################################################
@@ -80,6 +81,7 @@ class VectorEnv:
         self.intention_channel_nonspatial_scale = intention_channel_nonspatial_scale
         self.use_visit_frequency_map = use_visit_frequency_map
         self.visit_frequency_map_scale = visit_frequency_map_scale
+        self.use_shortest_path_to_cube_map = use_shortest_path_to_cube_map
 
         # Rewards
         self.use_shortest_path_partial_rewards = use_shortest_path_partial_rewards
@@ -157,6 +159,7 @@ class VectorEnv:
         self.obstacle_collision_body_b_ids_set = None  # For collision detection
         self.robot_collision_body_b_ids_set = None  # For collision detection
         self.available_cube_ids_set = None  # Excludes removed cubes, and cubes that are being lifted, thrown, or rescued
+        self.found_cube_ids_set = None
         self.removed_cube_ids_set = None  # Cubes that have been removed
 
         ################################################################################
@@ -513,6 +516,7 @@ class VectorEnv:
         self.obstacle_collision_body_b_ids_set = set(self.obstacle_ids)
         self.robot_collision_body_b_ids_set.update(self.robot_ids)
         self.available_cube_ids_set = set(self.cube_ids)
+        self.found_cube_ids_set = set()
         self.removed_cube_ids_set = set()
 
     def _get_obstacles(self, wall_thickness):
@@ -1963,6 +1967,10 @@ class Camera(ABC):
             seg += Camera.SEG_VALUES['receptacle'] * (seg_raw == self.receptacle_id).astype(np.float32)
         seg += Camera.SEG_VALUES['cube'] * np.logical_and(seg_raw >= self.min_cube_id, seg_raw <= self.max_cube_id).astype(np.float32)
 
+        cubes_found = np.unique(seg_raw[np.logical_and(seg_raw >= self.min_cube_id, seg_raw <= self.max_cube_id)])
+        for cube_found in cubes_found:
+            self.env.found_cube_ids_set.add(cube_found)
+
         # Get seg_visit
         seg_visit = np.zeros_like(seg_raw, dtype=np.float32)
         seg_visit += 1 * (seg_raw == 0)
@@ -2122,6 +2130,11 @@ class Mapper:
             local_shortest_path_to_receptacle_map = self._get_local_distance_map(global_shortest_path_to_receptacle_map)
             channels.append(local_shortest_path_to_receptacle_map)
 
+        if self.env.use_shortest_path_to_cube_map:
+            global_shortest_path_to_cube_map = self._create_global_shortest_path_to_cube_map()
+            local_shortest_path_to_cube_map = self._get_local_distance_map(global_shortest_path_to_cube_map)
+            channels.append(local_shortest_path_to_cube_map)
+
         # Shortest path distance map
         if self.env.use_shortest_path_map:
             global_shortest_path_map = self._create_global_shortest_path_map()
@@ -2196,6 +2209,10 @@ class Mapper:
             # Shortest path distance to receptacle map
             if self.env.use_shortest_path_to_receptacle_map:
                 save_map_visualization(global_shortest_path_to_receptacle_map, local_shortest_path_to_receptacle_map, 'shortest-path-to-receptacle-map', brightness_scale_factor=2)
+
+            # Shortest path distance to cube map
+            if self.env.use_shortest_path_to_cube_map:
+                save_map_visualization(global_shortest_path_to_cube_map, local_shortest_path_to_cube_map, 'shortest-path-to-cube-map', brightness_scale_factor=2)
 
             # Shortest path distance map
             if self.env.use_shortest_path_map:
@@ -2339,7 +2356,18 @@ class Mapper:
         global_map[global_map < 0] = global_map.max()
         global_map *= self.env.shortest_path_map_scale
         return global_map
-
+    
+    def _create_global_shortest_path_to_cube_map(self):
+        global_map = self._create_padded_room_zeros()
+        global_map[global_map == 0] = np.inf
+        for cube_id in self.env.found_cube_ids_set:
+            temp_map = self.global_occupancy_map.shortest_path_image(self.env.get_cube_position(cube_id))
+            global_map = np.minimum(global_map, temp_map)
+        global_map[global_map < 0] = global_map.max()
+        global_map[global_map == np.inf] = global_map.max()
+        global_map *= self.env.shortest_path_map_scale
+        return global_map
+    
     def _create_global_intention_or_history_map(self, encoding):
         global_intention_map = self._create_padded_room_zeros()
         for robot in self.env.robots:
