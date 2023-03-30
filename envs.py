@@ -2134,7 +2134,9 @@ class Mapper:
 
         # Distance to receptacle map
         if self.env.use_distance_to_receptacle_map:
-            channels.append(self._get_local_distance_map(self.global_distance_to_receptacle_map))
+            global_distance_to_receptacle_map = self.global_distance_to_receptacle_map
+            local_distance_to_receptacle_map = self._get_local_distance_map(global_distance_to_receptacle_map)
+            channels.append(local_distance_to_receptacle_map)
 
         # Shortest path distance to receptacle map
         if self.env.use_shortest_path_to_receptacle_map:
@@ -2227,6 +2229,10 @@ class Mapper:
             # Shortest path distance to receptacle map
             if self.env.use_shortest_path_to_receptacle_map:
                 save_map_visualization(global_shortest_path_to_receptacle_map, local_shortest_path_to_receptacle_map, 'shortest-path-to-receptacle-map', brightness_scale_factor=2)
+
+            # Distance to receptacle map
+            if self.env.use_distance_to_receptacle_map:
+                save_map_visualization(global_distance_to_receptacle_map, local_distance_to_receptacle_map, 'distance-to-receptacle-map', brightness_scale_factor=2)
 
             # Shortest path distance to cube map
             if self.env.use_shortest_path_to_cube_map:
