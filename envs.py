@@ -1397,7 +1397,7 @@ class RescueRobot(RobotWithHooks):
         self.cube_id = None
 
 class ExploringRobot(RobotWithHooks):
-    COLOR = (0.4, 0.8, 0.4, 1)  # Light gray
+    COLOR = (0.4, 0.8, 0.4, 1)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
