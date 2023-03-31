@@ -535,6 +535,9 @@ class VectorEnv:
                     self.p.setCollisionFilterPair(robot.id, cube_id, -1, -1, 0)
                 for obstacle_id in self.uav_obstacle_ids:
                     self.p.setCollisionFilterPair(robot.id, obstacle_id, -1, -1, 0)
+                for robot_b in self.robots:
+                    if not hasattr(robot_b, 'uav'):
+                        self.p.setCollisionFilterPair(robot.id, robot_b.id, -1, -1, 0)
 
     def _get_obstacles(self, wall_thickness):
         # if self.env_name.startswith('small'):
