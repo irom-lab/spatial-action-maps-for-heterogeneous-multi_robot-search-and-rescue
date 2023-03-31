@@ -2218,7 +2218,9 @@ class Mapper:
 
         # Visit frequency map
         if self.env.use_visit_frequency_map:
-            channels.append(self._get_local_visit_frequency_map(self.global_visit_frequency_map))
+            global_visit_frequency_map = self.global_visit_frequency_map
+            local_visit_frequency_map = self._get_local_visit_frequency_map(global_visit_frequency_map)
+            channels.append(local_visit_frequency_map)
 
         # Cube location map
         if self.env.use_cube_location_map:
@@ -2302,6 +2304,10 @@ class Mapper:
             # Intention map
             if self.env.use_intention_map:
                 save_map_visualization(global_intention_map, local_intention_map, 'intention-map')
+
+            # Visit frequency map
+            if self.env.use_visit_frequency_map:
+                save_map_visualization(global_visit_frequency_map, local_visit_frequency_map, 'visit-frequency-map')
 
             # Baseline intention channels
             if self.env.use_intention_channels:
