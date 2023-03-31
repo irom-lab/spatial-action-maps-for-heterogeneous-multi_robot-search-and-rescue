@@ -52,7 +52,8 @@ class VectorEnv:
             real=False, real_robot_indices=None, real_cube_indices=None, real_debug=False,
             use_visit_frequency_map=False, visit_frequency_map_scale=0.00,
             use_cube_location_map=False, cube_location_map_scale=0.00,
-            use_shortest_path_to_cube_map=False
+            use_shortest_path_to_cube_map=False,
+            use_shortest_path_to_rescue_robot_map=False,
         ):
 
         ################################################################################
@@ -85,6 +86,7 @@ class VectorEnv:
         self.use_shortest_path_to_cube_map = use_shortest_path_to_cube_map
         self.use_cube_location_map = use_cube_location_map
         self.cube_location_map_scale = cube_location_map_scale
+        self.use_shortest_path_to_rescue_robot_map = use_shortest_path_to_rescue_robot_map
 
         # Rewards
         self.use_shortest_path_partial_rewards = use_shortest_path_partial_rewards
@@ -1376,6 +1378,7 @@ class ThrowingRobot(RobotWithHooks):
 class RescueRobot(RobotWithHooks):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.rescue = True
         self.cube_id = None
 
     def store_new_action(self, action):
@@ -2193,10 +2196,17 @@ class Mapper:
             local_shortest_path_to_receptacle_map = self._get_local_distance_map(global_shortest_path_to_receptacle_map)
             channels.append(local_shortest_path_to_receptacle_map)
 
+        # Shortest path distance to cube map
         if self.env.use_shortest_path_to_cube_map:
             global_shortest_path_to_cube_map = self._create_global_shortest_path_to_cube_map()
             local_shortest_path_to_cube_map = self._get_local_distance_map(global_shortest_path_to_cube_map)
             channels.append(local_shortest_path_to_cube_map)
+
+        # Shortest path distance to rescue robot map
+        if self.env.use_shortest_path_to_rescue_robot_map:
+            global_shortest_path_to_rescue_robot_map = self._create_global_shortest_path_to_rescue_robot_map()
+            local_shortest_path_to_rescue_robot_map = self._get_local_distance_map(global_shortest_path_to_rescue_robot_map)
+            channels.append(local_shortest_path_to_rescue_robot_map)
 
         # Shortest path distance map
         if self.env.use_shortest_path_map:
@@ -2288,6 +2298,10 @@ class Mapper:
             # Shortest path distance to cube map
             if self.env.use_shortest_path_to_cube_map:
                 save_map_visualization(global_shortest_path_to_cube_map, local_shortest_path_to_cube_map, 'shortest-path-to-cube-map', brightness_scale_factor=2)
+
+            # Shortest path distance to rescue robot map
+            if self.env.use_shortest_path_to_rescue_robot_map:
+                save_map_visualization(global_shortest_path_to_rescue_robot_map, local_shortest_path_to_rescue_robot_map, 'shortest-path-to-rescue-robot-map', brightness_scale_factor=2)
 
             # Cube location map
             if self.env.use_cube_location_map:
@@ -2445,6 +2459,16 @@ class Mapper:
         for cube_id in self.env.found_cube_ids_set:
             temp_map = self.global_occupancy_map.shortest_path_image(self.env.get_cube_position(cube_id))
             global_map = np.minimum(global_map, temp_map)
+        global_map[global_map < 0] = global_map.max()
+        global_map *= self.env.shortest_path_map_scale
+        return global_map
+    
+    def _create_global_shortest_path_to_rescue_robot_map(self):
+        global_map = self._create_padded_room_zeros() + np.sqrt(self.env.room_length ** 2 + self.env.room_width ** 2)
+        for robot in self.env.robots:
+            if hasattr(robot, 'rescue'):
+                temp_map = self.global_occupancy_map.shortest_path_image(robot.get_position())
+                global_map = np.minimum(global_map, temp_map)
         global_map[global_map < 0] = global_map.max()
         global_map *= self.env.shortest_path_map_scale
         return global_map
