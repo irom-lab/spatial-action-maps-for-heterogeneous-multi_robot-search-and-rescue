@@ -48,6 +48,7 @@ def generate_experiments(template_path, output_dir):
         cfg.use_cube_location_map = config_params[3].find('clm') == -1
         cfg.cube_location_map_scale = 0.25
         cfg.use_shortest_path_to_cube_map = config_params[3].find('sptcm') == -1
+        cfg.num_input_channels = 3 + int(cfg.use_intention_map) + int(cfg.use_shortest_path_to_rescue_robot_map) + int(cfg.use_visit_frequency_map) + int(cfg.use_cube_location_map) + int(cfg.use_shortest_path_to_cube_map)
 
         # Save new config
         utils.save_config(output_dir / '{}.yml'.format(experiment_name), cfg)
