@@ -447,7 +447,7 @@ class VectorEnv:
         assert all(len(g) == 1 for g in self.robot_config)  # Each robot group should be homogeneous
         assert not len(self.robot_group_types) > 4  # More than 4 groups not supported
         if any('rescue_robot' in g for g in self.robot_config):
-            assert all(robot_type == 'rescue_robot' or robot_type == 'exploring_robot' for g in self.robot_config for robot_type in g)
+            assert all(robot_type == 'rescue_robot' or robot_type == 'exploring_robot' or robot_type == 'uav_robot' for g in self.robot_config for robot_type in g)
 
         # Create floor
         floor_thickness = 10
@@ -463,6 +463,7 @@ class VectorEnv:
         obstacle_color = (0.9, 0.9, 0.9, 1)
         rounded_corner_path = str(Path(__file__).parent / 'assets' / 'rounded_corner.obj')
         self.obstacle_ids = []
+        self.uav_obstacle_ids = []
         for obstacle in self._get_obstacles(wall_thickness):
             if obstacle['type'] == 'corner':
                 obstacle_collision_shape_id = self.p.createCollisionShape(pybullet.GEOM_MESH, fileName=rounded_corner_path)
@@ -477,6 +478,9 @@ class VectorEnv:
                 0, obstacle_collision_shape_id, obstacle_visual_shape_id,
                 (obstacle['position'][0], obstacle['position'][1], VectorEnv.WALL_HEIGHT / 2), heading_to_orientation(obstacle['heading']))
             self.obstacle_ids.append(obstacle_id)
+
+            if obstacle['type'] != 'wall':
+                self.uav_obstacle_ids.append(obstacle_id)
 
         # Create target receptacle
         if not any('rescue_robot' in g for g in self.robot_config):
@@ -521,6 +525,14 @@ class VectorEnv:
         self.available_cube_ids_set = set(self.cube_ids)
         self.found_cube_ids_set = set()
         self.removed_cube_ids_set = set()
+
+        # Remove collisions for uav_robots
+        for robot in self.robots:
+            if hasattr(robot, 'uav'):
+                for cube_id in self.cube_ids:
+                    self.p.setCollisionFilterPair(robot.id, cube_id, -1, -1, 0)
+                for obstacle_id in self.uav_obstacle_ids:
+                    self.p.setCollisionFilterPair(robot.id, obstacle_id, -1, -1, 0)
 
     def _get_obstacles(self, wall_thickness):
         # if self.env_name.startswith('small'):
@@ -881,7 +893,7 @@ class Robot(ABC):
         # Waypoints
 
         # Compute waypoint positions
-        if self.env.use_shortest_path_movement:
+        if self.env.use_shortest_path_movement and not hasattr(self, 'uav'):
             self.waypoint_positions = self.mapper.shortest_path(current_position, self.target_end_effector_position)
         else:
             self.waypoint_positions = [current_position, self.target_end_effector_position]
@@ -1040,10 +1052,13 @@ class Robot(ABC):
         ]
         lengths = [Robot.HEIGHT, None, None]
         rgba_colors = [self.COLOR, None, None]  # pybullet seems to ignore all colors after the first
+        offset = 0.0
+        if hasattr(self, 'uav'):
+            offset = 0.1
         frame_positions = [
-            (Robot.BACKPACK_OFFSET, 0, Robot.HEIGHT / 2),
-            (Robot.BACKPACK_OFFSET + self.BASE_LENGTH / 2, 0, base_height / 2),
-            (Robot.BACKPACK_OFFSET + Robot.TOP_LENGTH / 2, 0, Robot.HEIGHT / 2),
+            (Robot.BACKPACK_OFFSET, 0, Robot.HEIGHT / 2 + offset),
+            (Robot.BACKPACK_OFFSET + self.BASE_LENGTH / 2, 0, base_height / 2 + offset),
+            (Robot.BACKPACK_OFFSET + Robot.TOP_LENGTH / 2, 0, Robot.HEIGHT / 2 + offset),
         ]
         collision_shape_id = self.env.p.createCollisionShapeArray(
             shapeTypes=shape_types, radii=radii, halfExtents=half_extents, lengths=lengths, collisionFramePositions=frame_positions)
@@ -1063,6 +1078,8 @@ class Robot(ABC):
             return RescueRobot
         if robot_type == 'exploring_robot':
             return ExploringRobot
+        if robot_type == 'uav_robot':
+            return UAVRobot
         raise Exception(robot_type)
 
     @staticmethod
@@ -1386,6 +1403,13 @@ class ExploringRobot(RobotWithHooks):
         super().__init__(*args, **kwargs)
         self.cube_id = None
 
+class UAVRobot(Robot):
+    COLOR = (0.4, 0.6, 0.8, 1)
+
+    def __init__(self, *args, **kwargs):
+        self.uav = True
+        super().__init__(*args, **kwargs)
+
 class RobotController:
     DRIVE_STEP_SIZE = 0.005  # 5 mm results in exactly 1 mm per simulation step
     TURN_STEP_SIZE = math.radians(15)  # 15 deg results in exactly 3 deg per simulation step
@@ -1455,7 +1479,7 @@ class RobotController:
                         self.waypoint_index += 1
 
             # If still moving, set constraint for new pose
-            if self.state == 'moving':
+            if not hasattr(self.robot, 'uav') and self.state == 'moving':
                 new_position, new_heading = current_position, current_heading
 
                 # Determine whether to turn or drive
@@ -1480,7 +1504,32 @@ class RobotController:
                 # Set constraint
                 self.robot.env.p.changeConstraint(
                     self.robot.cid, jointChildPivot=new_position, jointChildFrameOrientation=heading_to_orientation(new_heading), maxForce=Robot.CONSTRAINT_MAX_FORCE)
+                
+            else:
+                curr_waypoint_position = self.robot.waypoint_positions[self.waypoint_index]
+                dx = curr_waypoint_position[0] - current_position[0]
+                dy = curr_waypoint_position[1] - current_position[1]
 
+                portion_of_step_size = RobotController.DRIVE_STEP_SIZE / distance(current_position, curr_waypoint_position)
+                if distance(current_position, curr_waypoint_position) < RobotController.DRIVE_STEP_SIZE:
+                    new_position = curr_waypoint_position
+                else:
+                    new_position_arr = [
+                        current_position[0] + dx * portion_of_step_size,
+                        current_position[1] + dy * portion_of_step_size,
+                        current_position[2]
+                    ]
+                    if new_position_arr[0] > self.robot.env.room_length / 2 or new_position_arr[0] < -self.robot.env.room_length / 2:
+                        new_position_arr[0] = current_position[0]
+                    if new_position_arr[1] > self.robot.env.room_width / 2 or new_position_arr[1] < -self.robot.env.room_width / 2:
+                        new_position_arr[1] = current_position[1]
+                    
+                    new_position = tuple(new_position_arr)
+
+                # Set constraint
+                self.robot.env.p.changeConstraint(
+                    self.robot.cid, jointChildPivot=new_position, jointChildFrameOrientation=heading_to_orientation(current_heading), maxForce=Robot.CONSTRAINT_MAX_FORCE)
+                
             self.prev_position, self.prev_heading = current_position, current_heading
 
         elif self.state == 'manipulating':
@@ -1978,10 +2027,10 @@ class Camera(ABC):
         for cube_found in cubes_found:
             self.env.found_cube_ids_set.add(cube_found)
 
-        if len(self.env.found_cube_ids_set ) == 0:
-            print("No cubes found")
-        else:
-            print("Cubes found: ", self.env.found_cube_ids_set)
+        # if len(self.env.found_cube_ids_set ) == 0:
+        #     print("No cubes found")
+        # else:
+        #     print("Cubes found: ", self.env.found_cube_ids_set)
 
         # Get seg_visit
         seg_visit = np.zeros_like(seg_raw, dtype=np.float32)
@@ -1999,7 +2048,7 @@ class Camera(ABC):
         pass
 
 class OverheadCamera(Camera):
-    HEIGHT = 1  # 1 m
+    HEIGHT = 0.3  # 1 m
     ASPECT = 1
     NEAR = 0.1  # 10 cm
     FAR = 10  # 10 m
@@ -2053,7 +2102,7 @@ class Mapper:
         self.robot = robot
 
         # Camera
-        if self.env.use_partial_observations:
+        if self.env.use_partial_observations and not hasattr(self.robot, 'uav'):
             self.camera = ForwardFacingCamera(self.env)
         else:
             self.camera = OverheadCamera(self.env)
