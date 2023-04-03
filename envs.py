@@ -578,6 +578,22 @@ class VectorEnv:
             obstacles.append({'type': 'divider', 'position': (x_offset, top_divider_y), 'heading': 0, 'x_len': divider_width, 'y_len': top_divider_len, 'snap_y': y_offset + divider_width / 2})
             obstacles.append({'type': 'divider', 'position': (x_offset, bot_divider_y), 'heading': 0, 'x_len': divider_width, 'y_len': bot_divider_len, 'snap_y': y_offset - divider_width / 2})
 
+        def add_random_columns(num_columns, random_state):
+            column_length = 0.1
+            column_width = 0.1
+            buffer_width = 0.08
+
+            for _ in range(num_columns):
+                x = random_state.uniform(
+                    -self.room_length / 2 + 2 * buffer_width + column_length / 2,
+                    self.room_length / 2 - 2 * buffer_width - column_length / 2
+                )
+                y = random_state.uniform(
+                    -self.room_width / 2 + 2 * buffer_width + column_width / 2,
+                    self.room_width / 2 - 2 * buffer_width - column_width / 2
+                )
+                obstacles.append({'type': 'column', 'position': (x, y), 'heading': 0, 'x_len': column_length, 'y_len': column_width})
+
         # Walls
         obstacles = []
         for x, y, length, width in [
@@ -618,6 +634,9 @@ class VectorEnv:
 
         elif self.env_name == 'large_rooms':
             add_rooms(x_offset=self.room_random_state.uniform(-0.05, 0.05), y_offset=self.room_random_state.uniform(-0.05, 0.05))
+
+        elif self.env_name == 'large_columns':
+            add_random_columns(num_columns=self.room_random_state.randint(1, 10), random_state=self.room_random_state)
 
         else:
             raise Exception(self.env_name)
