@@ -1014,18 +1014,19 @@ class Robot(ABC):
 
     def check_for_collisions(self):
         for body_a_id in self.collision_body_a_ids_set:
-            if self.env.p.getContactPoints(body_a_id) is None:
+            try:
+                for contact_point in self.env.p.getContactPoints(body_a_id):
+                    body_b_id = contact_point[2]
+                    if body_b_id in self.collision_body_a_ids_set:
+                        continue
+                    if body_b_id in self.env.obstacle_collision_body_b_ids_set:
+                        self.collided_with_obstacle = True
+                    if body_b_id in self.env.robot_collision_body_b_ids_set:
+                        self.collided_with_robot = True
+                    if self.collided_with_obstacle or self.collided_with_robot:
+                        break
+            except:
                 pass
-            for contact_point in self.env.p.getContactPoints(body_a_id):
-                body_b_id = contact_point[2]
-                if body_b_id in self.collision_body_a_ids_set:
-                    continue
-                if body_b_id in self.env.obstacle_collision_body_b_ids_set:
-                    self.collided_with_obstacle = True
-                if body_b_id in self.env.robot_collision_body_b_ids_set:
-                    self.collided_with_robot = True
-                if self.collided_with_obstacle or self.collided_with_robot:
-                    break
 
     def update_distance(self):
         current_position = self.get_position()
