@@ -191,8 +191,8 @@ def get_env_from_cfg(cfg, **kwargs):
             final_kwargs[arg_name] = cfg[arg_name]
         else:
             print('kwarg {} not found in config'.format(arg_name))
-            if arg_name not in {'use_robot_map', 'intention_map_scale', 'intention_map_line_thickness'}:
-                raise Exception
+            if arg_name not in {'use_robot_map', 'intention_map_scale', 'intention_map_line_thickness', 'use_visit_frequency_map', 'visit_frequency_map_scale', 'use_shortest_path_to_cube_map', 'show_cube_occupancy_maps', 'use_cube_location_map', 'cube_location_map_scale',}:
+                pass
     final_kwargs.update(kwargs)
 
     # Additional modifications for real robot

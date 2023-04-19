@@ -6,7 +6,7 @@ from multiprocessing.connection import Client
 from pathlib import Path
 from pprint import pprint
 
-import anki_vector
+# import anki_vector
 import numpy as np
 import pybullet
 import pybullet_utils.bullet_client as bc
@@ -50,6 +50,10 @@ class VectorEnv:
             random_seed=None, use_egl_renderer=False,
             show_gui=False, show_debug_annotations=False, show_occupancy_maps=False,
             real=False, real_robot_indices=None, real_cube_indices=None, real_debug=False,
+            use_visit_frequency_map=False, visit_frequency_map_scale=0.00,
+            use_cube_location_map=False, cube_location_map_scale=0.00,
+            use_shortest_path_to_cube_map=False,
+            use_shortest_path_to_rescue_robot_map=False,
         ):
 
         ################################################################################
@@ -77,6 +81,12 @@ class VectorEnv:
         self.use_intention_channels = use_intention_channels
         self.intention_channel_encoding = intention_channel_encoding
         self.intention_channel_nonspatial_scale = intention_channel_nonspatial_scale
+        self.use_visit_frequency_map = use_visit_frequency_map
+        self.visit_frequency_map_scale = visit_frequency_map_scale
+        self.use_shortest_path_to_cube_map = use_shortest_path_to_cube_map
+        self.use_cube_location_map = use_cube_location_map
+        self.cube_location_map_scale = cube_location_map_scale
+        self.use_shortest_path_to_rescue_robot_map = use_shortest_path_to_rescue_robot_map
 
         # Rewards
         self.use_shortest_path_partial_rewards = use_shortest_path_partial_rewards
@@ -114,9 +124,9 @@ class VectorEnv:
             self.p.configureDebugVisualizer(pybullet.COV_ENABLE_GUI, 0)
         else:
             self.p = bc.BulletClient(connection_mode=pybullet.DIRECT)
-            if self.use_egl_renderer:
-                assert sys.platform == 'linux'  # Linux only
-                self.plugin_id = self.p.loadPlugin(pkgutil.get_loader('eglRenderer').get_filename(), "_eglRendererPlugin")
+            # if self.use_egl_renderer:
+                # assert sys.platform == 'linux'  # Linux only
+                # self.plugin_id = self.p.loadPlugin(pkgutil.get_loader('eglRenderer').get_filename(), "_eglRendererPlugin")
 
         self.p.resetDebugVisualizerCamera(
             0.47 + (5.25 - 0.47) / (10 - 0.7) * (self.room_length - 0.7), 0, -70,
@@ -154,6 +164,7 @@ class VectorEnv:
         self.obstacle_collision_body_b_ids_set = None  # For collision detection
         self.robot_collision_body_b_ids_set = None  # For collision detection
         self.available_cube_ids_set = None  # Excludes removed cubes, and cubes that are being lifted, thrown, or rescued
+        self.found_cube_ids_set = None
         self.removed_cube_ids_set = None  # Cubes that have been removed
 
         ################################################################################
@@ -438,7 +449,7 @@ class VectorEnv:
         assert all(len(g) == 1 for g in self.robot_config)  # Each robot group should be homogeneous
         assert not len(self.robot_group_types) > 4  # More than 4 groups not supported
         if any('rescue_robot' in g for g in self.robot_config):
-            assert all(robot_type == 'rescue_robot' for g in self.robot_config for robot_type in g)
+            assert all(robot_type == 'rescue_robot' or robot_type == 'exploring_robot' or robot_type == 'uav_robot' for g in self.robot_config for robot_type in g)
 
         # Create floor
         floor_thickness = 10
@@ -454,6 +465,7 @@ class VectorEnv:
         obstacle_color = (0.9, 0.9, 0.9, 1)
         rounded_corner_path = str(Path(__file__).parent / 'assets' / 'rounded_corner.obj')
         self.obstacle_ids = []
+        self.uav_obstacle_ids = []
         for obstacle in self._get_obstacles(wall_thickness):
             if obstacle['type'] == 'corner':
                 obstacle_collision_shape_id = self.p.createCollisionShape(pybullet.GEOM_MESH, fileName=rounded_corner_path)
@@ -468,6 +480,9 @@ class VectorEnv:
                 0, obstacle_collision_shape_id, obstacle_visual_shape_id,
                 (obstacle['position'][0], obstacle['position'][1], VectorEnv.WALL_HEIGHT / 2), heading_to_orientation(obstacle['heading']))
             self.obstacle_ids.append(obstacle_id)
+
+            if obstacle['type'] != 'wall':
+                self.uav_obstacle_ids.append(obstacle_id)
 
         # Create target receptacle
         if not any('rescue_robot' in g for g in self.robot_config):
@@ -510,15 +525,27 @@ class VectorEnv:
         self.obstacle_collision_body_b_ids_set = set(self.obstacle_ids)
         self.robot_collision_body_b_ids_set.update(self.robot_ids)
         self.available_cube_ids_set = set(self.cube_ids)
+        self.found_cube_ids_set = set()
         self.removed_cube_ids_set = set()
 
+        # Remove collisions for uav_robots
+        for robot in self.robots:
+            if hasattr(robot, 'uav'):
+                for cube_id in self.cube_ids:
+                    self.p.setCollisionFilterPair(robot.id, cube_id, -1, -1, 0)
+                for obstacle_id in self.uav_obstacle_ids:
+                    self.p.setCollisionFilterPair(robot.id, obstacle_id, -1, -1, 0)
+                for robot_b in self.robots:
+                    if not hasattr(robot_b, 'uav'):
+                        self.p.setCollisionFilterPair(robot.id, robot_b.id, -1, -1, 0)
+
     def _get_obstacles(self, wall_thickness):
-        if self.env_name.startswith('small'):
-            assert math.isclose(self.room_length, 1)
-            assert math.isclose(self.room_width, 0.5)
-        elif self.env_name.startswith('large'):
-            assert math.isclose(self.room_length, 1)
-            assert math.isclose(self.room_width, 1)
+        # if self.env_name.startswith('small'):
+        #     assert math.isclose(self.room_length, 1)
+        #     assert math.isclose(self.room_width, 0.5)
+        # elif self.env_name.startswith('large'):
+        #     assert math.isclose(self.room_length, 1)
+        #     assert math.isclose(self.room_width, 1)
 
         def add_divider(x_offset=0):
             divider_width = 0.05
@@ -550,6 +577,22 @@ class VectorEnv:
             obstacles.append({'type': 'divider', 'position': (0, y_offset), 'heading': 0, 'x_len': self.room_length - 2 * opening_width, 'y_len': divider_width})
             obstacles.append({'type': 'divider', 'position': (x_offset, top_divider_y), 'heading': 0, 'x_len': divider_width, 'y_len': top_divider_len, 'snap_y': y_offset + divider_width / 2})
             obstacles.append({'type': 'divider', 'position': (x_offset, bot_divider_y), 'heading': 0, 'x_len': divider_width, 'y_len': bot_divider_len, 'snap_y': y_offset - divider_width / 2})
+
+        def add_random_columns(num_columns, random_state):
+            column_length = 0.1
+            column_width = 0.1
+            buffer_width = 0.08
+
+            for _ in range(num_columns):
+                x = random_state.uniform(
+                    -self.room_length / 2 + 2 * buffer_width + column_length / 2,
+                    self.room_length / 2 - 2 * buffer_width - column_length / 2
+                )
+                y = random_state.uniform(
+                    -self.room_width / 2 + 2 * buffer_width + column_width / 2,
+                    self.room_width / 2 - 2 * buffer_width - column_width / 2
+                )
+                obstacles.append({'type': 'column', 'position': (x, y), 'heading': 0, 'x_len': column_length, 'y_len': column_width})
 
         # Walls
         obstacles = []
@@ -591,6 +634,9 @@ class VectorEnv:
 
         elif self.env_name == 'large_rooms':
             add_rooms(x_offset=self.room_random_state.uniform(-0.05, 0.05), y_offset=self.room_random_state.uniform(-0.05, 0.05))
+
+        elif self.env_name == 'large_columns':
+            add_random_columns(num_columns=self.room_random_state.randint(1, 10), random_state=self.room_random_state)
 
         else:
             raise Exception(self.env_name)
@@ -871,7 +917,7 @@ class Robot(ABC):
         # Waypoints
 
         # Compute waypoint positions
-        if self.env.use_shortest_path_movement:
+        if self.env.use_shortest_path_movement and not hasattr(self, 'uav'):
             self.waypoint_positions = self.mapper.shortest_path(current_position, self.target_end_effector_position)
         else:
             self.waypoint_positions = [current_position, self.target_end_effector_position]
@@ -987,16 +1033,19 @@ class Robot(ABC):
 
     def check_for_collisions(self):
         for body_a_id in self.collision_body_a_ids_set:
-            for contact_point in self.env.p.getContactPoints(body_a_id):
-                body_b_id = contact_point[2]
-                if body_b_id in self.collision_body_a_ids_set:
-                    continue
-                if body_b_id in self.env.obstacle_collision_body_b_ids_set:
-                    self.collided_with_obstacle = True
-                if body_b_id in self.env.robot_collision_body_b_ids_set:
-                    self.collided_with_robot = True
-                if self.collided_with_obstacle or self.collided_with_robot:
-                    break
+            try:
+                for contact_point in self.env.p.getContactPoints(body_a_id):
+                    body_b_id = contact_point[2]
+                    if body_b_id in self.collision_body_a_ids_set:
+                        continue
+                    if body_b_id in self.env.obstacle_collision_body_b_ids_set:
+                        self.collided_with_obstacle = True
+                    if body_b_id in self.env.robot_collision_body_b_ids_set:
+                        self.collided_with_robot = True
+                    if self.collided_with_obstacle or self.collided_with_robot:
+                        break
+            except:
+                pass
 
     def update_distance(self):
         current_position = self.get_position()
@@ -1028,10 +1077,13 @@ class Robot(ABC):
         ]
         lengths = [Robot.HEIGHT, None, None]
         rgba_colors = [self.COLOR, None, None]  # pybullet seems to ignore all colors after the first
+        offset = 0.0
+        if hasattr(self, 'uav'):
+            offset = 0.1
         frame_positions = [
-            (Robot.BACKPACK_OFFSET, 0, Robot.HEIGHT / 2),
-            (Robot.BACKPACK_OFFSET + self.BASE_LENGTH / 2, 0, base_height / 2),
-            (Robot.BACKPACK_OFFSET + Robot.TOP_LENGTH / 2, 0, Robot.HEIGHT / 2),
+            (Robot.BACKPACK_OFFSET, 0, Robot.HEIGHT / 2 + offset),
+            (Robot.BACKPACK_OFFSET + self.BASE_LENGTH / 2, 0, base_height / 2 + offset),
+            (Robot.BACKPACK_OFFSET + Robot.TOP_LENGTH / 2, 0, Robot.HEIGHT / 2 + offset),
         ]
         collision_shape_id = self.env.p.createCollisionShapeArray(
             shapeTypes=shape_types, radii=radii, halfExtents=half_extents, lengths=lengths, collisionFramePositions=frame_positions)
@@ -1049,6 +1101,10 @@ class Robot(ABC):
             return ThrowingRobot
         if robot_type == 'rescue_robot':
             return RescueRobot
+        if robot_type == 'exploring_robot':
+            return ExploringRobot
+        if robot_type == 'uav_robot':
+            return UAVRobot
         raise Exception(robot_type)
 
     @staticmethod
@@ -1345,6 +1401,7 @@ class ThrowingRobot(RobotWithHooks):
 class RescueRobot(RobotWithHooks):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.rescue = True
         self.cube_id = None
 
     def store_new_action(self, action):
@@ -1364,6 +1421,20 @@ class RescueRobot(RobotWithHooks):
         self.process_cube_success()
         self.env.remove_cube(self.cube_id)
         self.cube_id = None
+
+class ExploringRobot(RobotWithHooks):
+    COLOR = (0.4, 0.8, 0.4, 1)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.cube_id = None
+
+class UAVRobot(Robot):
+    COLOR = (0.4, 0.6, 0.8, 1)
+
+    def __init__(self, *args, **kwargs):
+        self.uav = True
+        super().__init__(*args, **kwargs)
 
 class RobotController:
     DRIVE_STEP_SIZE = 0.005  # 5 mm results in exactly 1 mm per simulation step
@@ -1434,7 +1505,7 @@ class RobotController:
                         self.waypoint_index += 1
 
             # If still moving, set constraint for new pose
-            if self.state == 'moving':
+            if not hasattr(self.robot, 'uav') and self.state == 'moving':
                 new_position, new_heading = current_position, current_heading
 
                 # Determine whether to turn or drive
@@ -1459,7 +1530,32 @@ class RobotController:
                 # Set constraint
                 self.robot.env.p.changeConstraint(
                     self.robot.cid, jointChildPivot=new_position, jointChildFrameOrientation=heading_to_orientation(new_heading), maxForce=Robot.CONSTRAINT_MAX_FORCE)
+                
+            else:
+                curr_waypoint_position = self.robot.waypoint_positions[self.waypoint_index]
+                dx = curr_waypoint_position[0] - current_position[0]
+                dy = curr_waypoint_position[1] - current_position[1]
 
+                portion_of_step_size = RobotController.DRIVE_STEP_SIZE / distance(current_position, curr_waypoint_position)
+                if distance(current_position, curr_waypoint_position) < RobotController.DRIVE_STEP_SIZE:
+                    new_position = curr_waypoint_position
+                else:
+                    new_position_arr = [
+                        current_position[0] + dx * portion_of_step_size,
+                        current_position[1] + dy * portion_of_step_size,
+                        current_position[2]
+                    ]
+                    if new_position_arr[0] > self.robot.env.room_length / 2 or new_position_arr[0] < -self.robot.env.room_length / 2:
+                        new_position_arr[0] = current_position[0]
+                    if new_position_arr[1] > self.robot.env.room_width / 2 or new_position_arr[1] < -self.robot.env.room_width / 2:
+                        new_position_arr[1] = current_position[1]
+                    
+                    new_position = tuple(new_position_arr)
+
+                # Set constraint
+                self.robot.env.p.changeConstraint(
+                    self.robot.cid, jointChildPivot=new_position, jointChildFrameOrientation=heading_to_orientation(current_heading), maxForce=Robot.CONSTRAINT_MAX_FORCE)
+                
             self.prev_position, self.prev_heading = current_position, current_heading
 
         elif self.state == 'manipulating':
@@ -1500,6 +1596,8 @@ class RobotController:
                     elif isinstance(self.robot, RescueRobot):
                         self.robot.prepare_rescue_cube(cube_id)
                         self.robot.rescue_cube()
+                    elif isinstance(self.robot, ExploringRobot):
+                        pass
 
 class RealRobotController:
     LOOKAHEAD_DISTANCE = 0.1  # 10 cm
@@ -1951,7 +2049,21 @@ class Camera(ABC):
             seg += Camera.SEG_VALUES['receptacle'] * (seg_raw == self.receptacle_id).astype(np.float32)
         seg += Camera.SEG_VALUES['cube'] * np.logical_and(seg_raw >= self.min_cube_id, seg_raw <= self.max_cube_id).astype(np.float32)
 
-        return points, seg
+        cubes_found = np.unique(seg_raw[np.logical_and(seg_raw >= self.min_cube_id, seg_raw <= self.max_cube_id)])
+        for cube_found in cubes_found:
+            self.env.found_cube_ids_set.add(cube_found)
+
+        # if len(self.env.found_cube_ids_set ) == 0:
+        #     print("No cubes found")
+        # else:
+        #     print("Cubes found: ", self.env.found_cube_ids_set)
+
+        # Get seg_visit
+        seg_visit = np.zeros_like(seg_raw, dtype=np.float32)
+        seg_visit += 1 * (seg_raw == 0)
+        seg_visit += 1 * (seg_raw >= self.min_obstacle_id) * (seg_raw <= self.max_obstacle_id)
+
+        return points, seg, seg_visit
 
     def get_seg_value(self, body_type):
         self._ensure_initialized()
@@ -1962,7 +2074,7 @@ class Camera(ABC):
         pass
 
 class OverheadCamera(Camera):
-    HEIGHT = 1  # 1 m
+    HEIGHT = 0.3  # 1 m
     ASPECT = 1
     NEAR = 0.1  # 10 cm
     FAR = 10  # 10 m
@@ -2016,7 +2128,7 @@ class Mapper:
         self.robot = robot
 
         # Camera
-        if self.env.use_partial_observations:
+        if self.env.use_partial_observations and not hasattr(self.robot, 'uav'):
             self.camera = ForwardFacingCamera(self.env)
         else:
             self.camera = OverheadCamera(self.env)
@@ -2026,6 +2138,10 @@ class Mapper:
 
         # Occupancy map
         self.global_occupancy_map = OccupancyMap(self.robot, self.env.room_length, self.env.room_width, show_map=self.env.show_occupancy_maps)
+
+        # Visit Frequency Map
+        self.global_visit_frequency_map = self._create_padded_room_zeros()
+        self.step_exploration = self._create_padded_room_zeros()
 
         # Robot masks for overhead map and robot map
         self.robot_masks = {}
@@ -2052,7 +2168,7 @@ class Mapper:
 
     def update(self):
         # Get new observation
-        points, seg = self.camera.capture_image(self.robot.get_position(), self.robot.get_heading())
+        points, seg, seg_visit = self.camera.capture_image(self.robot.get_position(), self.robot.get_heading())
         augmented_points = np.concatenate((points, seg[:, :, np.newaxis]), axis=2).reshape(-1, 4)
         augmented_points = augmented_points[np.argsort(augmented_points[:, 2])]
 
@@ -2063,6 +2179,19 @@ class Mapper:
         # Update occupancy map
         if self.global_occupancy_map is not None:
             self.global_occupancy_map.update(points, seg, self.camera.get_seg_value('obstacle'))
+
+        # Update step exploration map
+        if self.global_visit_frequency_map is not None:
+            augmented_points = np.concatenate((points, np.isclose(seg_visit[:, :, np.newaxis], 1)), axis=2).reshape(-1, 4)
+            augmented_points = augmented_points[np.isclose(augmented_points[:, 3], 1)]
+            pixel_i, pixel_j = Mapper.position_to_pixel_indices(augmented_points[:, 0], augmented_points[:, 1], self.global_visit_frequency_map.shape)
+            self.step_exploration[pixel_i, pixel_j] = 1
+            self._update_vfm_state()
+
+    def _update_vfm_state(self):
+        self.step_exploration *= self.env.visit_frequency_map_scale
+        self.global_visit_frequency_map += self.step_exploration
+        self.step_exploration = self._create_padded_room_zeros()
 
     def get_state(self, save_figures=False):
         channels = []
@@ -2080,13 +2209,27 @@ class Mapper:
 
         # Distance to receptacle map
         if self.env.use_distance_to_receptacle_map:
-            channels.append(self._get_local_distance_map(self.global_distance_to_receptacle_map))
+            global_distance_to_receptacle_map = self.global_distance_to_receptacle_map
+            local_distance_to_receptacle_map = self._get_local_distance_map(global_distance_to_receptacle_map)
+            channels.append(local_distance_to_receptacle_map)
 
         # Shortest path distance to receptacle map
         if self.env.use_shortest_path_to_receptacle_map:
             global_shortest_path_to_receptacle_map = self._create_global_shortest_path_to_receptacle_map()
             local_shortest_path_to_receptacle_map = self._get_local_distance_map(global_shortest_path_to_receptacle_map)
             channels.append(local_shortest_path_to_receptacle_map)
+
+        # Shortest path distance to cube map
+        if self.env.use_shortest_path_to_cube_map:
+            global_shortest_path_to_cube_map = self._create_global_shortest_path_to_cube_map()
+            local_shortest_path_to_cube_map = self._get_local_distance_map(global_shortest_path_to_cube_map)
+            channels.append(local_shortest_path_to_cube_map)
+
+        # Shortest path distance to rescue robot map
+        if self.env.use_shortest_path_to_rescue_robot_map:
+            global_shortest_path_to_rescue_robot_map = self._create_global_shortest_path_to_rescue_robot_map()
+            local_shortest_path_to_rescue_robot_map = self._get_local_distance_map(global_shortest_path_to_rescue_robot_map)
+            channels.append(local_shortest_path_to_rescue_robot_map)
 
         # Shortest path distance map
         if self.env.use_shortest_path_map:
@@ -2105,6 +2248,18 @@ class Mapper:
             global_intention_map = self._create_global_intention_or_history_map(encoding=self.env.intention_map_encoding)
             local_intention_map = self._get_local_map(global_intention_map)
             channels.append(local_intention_map)
+
+        # Visit frequency map
+        if self.env.use_visit_frequency_map:
+            global_visit_frequency_map = self.global_visit_frequency_map
+            local_visit_frequency_map = self._get_local_visit_frequency_map(global_visit_frequency_map)
+            channels.append(local_visit_frequency_map)
+
+        # Cube location map
+        if self.env.use_cube_location_map:
+            global_cube_location_map = self._create_global_cube_location_map()
+            local_cube_location_map = self._get_local_map(global_cube_location_map)
+            channels.append(local_cube_location_map)
 
         # Baseline intention channels
         if self.env.use_intention_channels:
@@ -2159,6 +2314,22 @@ class Mapper:
             if self.env.use_shortest_path_to_receptacle_map:
                 save_map_visualization(global_shortest_path_to_receptacle_map, local_shortest_path_to_receptacle_map, 'shortest-path-to-receptacle-map', brightness_scale_factor=2)
 
+            # Distance to receptacle map
+            if self.env.use_distance_to_receptacle_map:
+                save_map_visualization(global_distance_to_receptacle_map, local_distance_to_receptacle_map, 'distance-to-receptacle-map', brightness_scale_factor=2)
+
+            # Shortest path distance to cube map
+            if self.env.use_shortest_path_to_cube_map:
+                save_map_visualization(global_shortest_path_to_cube_map, local_shortest_path_to_cube_map, 'shortest-path-to-cube-map', brightness_scale_factor=2)
+
+            # Shortest path distance to rescue robot map
+            if self.env.use_shortest_path_to_rescue_robot_map:
+                save_map_visualization(global_shortest_path_to_rescue_robot_map, local_shortest_path_to_rescue_robot_map, 'shortest-path-to-rescue-robot-map', brightness_scale_factor=2)
+
+            # Cube location map
+            if self.env.use_cube_location_map:
+                save_map_visualization(global_cube_location_map, local_cube_location_map, 'cube-location-map', brightness_scale_factor=2)
+
             # Shortest path distance map
             if self.env.use_shortest_path_map:
                 save_map_visualization(global_shortest_path_map, local_shortest_path_map, 'shortest-path-map', brightness_scale_factor=2)
@@ -2170,6 +2341,10 @@ class Mapper:
             # Intention map
             if self.env.use_intention_map:
                 save_map_visualization(global_intention_map, local_intention_map, 'intention-map')
+
+            # Visit frequency map
+            if self.env.use_visit_frequency_map:
+                save_map_visualization(global_visit_frequency_map, local_visit_frequency_map, 'visit-frequency-map')
 
             # Baseline intention channels
             if self.env.use_intention_channels:
@@ -2213,6 +2388,10 @@ class Mapper:
         local_map = self._get_local_map(global_map)
         local_map -= local_map.min()
         return local_map
+
+    def _get_local_visit_frequency_map(self, global_map):
+        local_visit_freq_map = self._get_local_map(global_map)
+        return local_visit_freq_map
 
     @staticmethod
     def _create_robot_mask(robot_cls, show_lifted_cube=False):
@@ -2297,7 +2476,26 @@ class Mapper:
         global_map[global_map < 0] = global_map.max()
         global_map *= self.env.shortest_path_map_scale
         return global_map
-
+    
+    def _create_global_shortest_path_to_cube_map(self):
+        global_map = self._create_padded_room_zeros() + np.sqrt(self.env.room_length ** 2 + self.env.room_width ** 2)
+        for cube_id in self.env.found_cube_ids_set:
+            temp_map = self.global_occupancy_map.shortest_path_image(self.env.get_cube_position(cube_id))
+            global_map = np.minimum(global_map, temp_map)
+        global_map[global_map < 0] = global_map.max()
+        global_map *= self.env.shortest_path_map_scale
+        return global_map
+    
+    def _create_global_shortest_path_to_rescue_robot_map(self):
+        global_map = self._create_padded_room_zeros() + np.sqrt(self.env.room_length ** 2 + self.env.room_width ** 2)
+        for robot in self.env.robots:
+            if hasattr(robot, 'rescue'):
+                temp_map = self.global_occupancy_map.shortest_path_image(robot.get_position())
+                global_map = np.minimum(global_map, temp_map)
+        global_map[global_map < 0] = global_map.max()
+        global_map *= self.env.shortest_path_map_scale
+        return global_map
+    
     def _create_global_intention_or_history_map(self, encoding):
         global_intention_map = self._create_padded_room_zeros()
         for robot in self.env.robots:
@@ -2345,6 +2543,14 @@ class Mapper:
 
         return global_intention_map
 
+    def _create_global_cube_location_map(self):
+        global_map = self._create_padded_room_zeros()
+        for cube_id in self.env.found_cube_ids_set:
+            cube_position = self.env.get_cube_position(cube_id)
+            pixel_i, pixel_j = Mapper.position_to_pixel_indices(cube_position[0], cube_position[1], global_map.shape)
+            global_map[pixel_i, pixel_j] = 1
+        return global_map
+    
     def _get_intention_channels(self):
         robot_position, robot_heading = self.robot.get_position(), self.robot.get_heading()
         dists = [distance(robot_position, robot.get_position()) for robot in self.env.robots]
